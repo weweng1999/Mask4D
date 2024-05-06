@@ -13,7 +13,7 @@ from mask_4d.utils.evaluate_4dpanoptic import PanopticKitti4DEvaluator
 from mask_4d.utils.evaluate_panoptic import PanopticKittiEvaluator
 from mask_4d.utils.instances import Tracks
 from mask_4d.utils.kalman_filter import KalmanBoxTracker
-from pytorch_lightning.core.lightning import LightningModule
+from pytorch_lightning import LightningModule
 
 
 class Mask4D(LightningModule):
@@ -49,6 +49,8 @@ class Mask4D(LightningModule):
         self.last_pose = np.eye(4)
         self.trackers = {}
         self.min_mask_pts = hparams.KITTI.MIN_POINTS
+        self.validation_step_outputs = []
+        
 
     def forward(self, x, track_ins):
         feats, coors, logits = self.backbone(x)
@@ -116,16 +118,41 @@ class Mask4D(LightningModule):
         total_loss = sum(losses.values())
         self.log("train_loss", total_loss, batch_size=self.cfg.TRAIN.BATCH_SIZE)
         return total_loss
-
     def validation_step(self, x: dict, idx):
-        self.evaluation_step(x, idx)
+        try:
+            sem_pred, ins_pred = self.panoptic4d_inference(x)
+            # Make sure you're appending a tuple here
+            self.validation_step_outputs.append((sem_pred, ins_pred, x))
+            return sem_pred, ins_pred, x
+        except Exception as e:
+            print(f"Error during validation inference: {e}")
+            # Append a tuple of Nones if inference fails
+            self.validation_step_outputs.append((None, None, None))
+            return None, None, None
+
+    # def validation_step(self, x: dict, idx):
+    #     # self.evaluation_step(x, idx)
+    #     outputs = self.evaluation_step(x,idx)
+    #     self.validation_step_outputs.append(outputs)
+    #     return outputs
 
     def evaluation_step(self, x: dict, idx):
         sem_pred, ins_pred = self.panoptic4d_inference(x)
         self.evaluator.update(sem_pred, ins_pred, x)
         self.evaluator4d.update(sem_pred, ins_pred, x)
 
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
+        if self.validation_step_outputs:
+            for output in self.validation_step_outputs:
+                # Check if the output is not None and is iterable
+                if output and isinstance(output, tuple):
+                    sem_pred, ins_pred, x = output
+                    self.evaluator.update(sem_pred, ins_pred, x)
+                    self.evaluator4d.update(sem_pred, ins_pred, x)
+                else:
+                    print("Invalid or None output skipped.")
+
+        self.evaluator4d.calculate_metrics()
         self.log(
             "metrics/pq",
             self.evaluator.get_mean_pq(),
@@ -141,7 +168,7 @@ class Mask4D(LightningModule):
             self.evaluator.get_mean_rq(),
             batch_size=self.cfg.TRAIN.BATCH_SIZE,
         )
-        self.evaluator4d.calculate_metrics()
+        # self.evaluator4d.calculate_metrics()
         self.log(
             "metrics/aq",
             self.evaluator4d.get_mean_aq(),
@@ -152,6 +179,7 @@ class Mask4D(LightningModule):
             self.evaluator4d.get_mean_pq4d(),
             batch_size=self.cfg.TRAIN.BATCH_SIZE,
         )
+        self.validation_step_outputs.clear
 
         # reset tracking variables
         self.last_ins_id = 1
@@ -327,10 +355,20 @@ class Mask4D(LightningModule):
         losses.update(self.aux_outs_loss(outputs, targets, indices, scan_i))
         return pred_idx, tgt_idx, losses
 
+    # def tracking_step(self, outputs, targets, track_ins, scan_i):
+    #     matched_ins, matched_outputs, matched_tgt = self.fixed_match(
+    #         track_ins, outputs, targets
+    #     )
     def tracking_step(self, outputs, targets, track_ins, scan_i):
-        matched_ins, matched_outputs, matched_tgt = self.fixed_match(
-            track_ins, outputs, targets
-        )
+        try:
+            matched_ins, matched_outputs, matched_tgt = self.fixed_match(track_ins, outputs, targets)
+        except ValueError as e:
+            print(f"Error on scan {scan_i}: {e}")
+            print(f"track_ins: {track_ins}")
+            print(f"outputs: {outputs}")
+            print(f"targets: {targets}")
+            raise
+        # Continue with normal processing
 
         track_loss = {}
         if len(matched_ins) > 0:
@@ -348,19 +386,48 @@ class Mask4D(LightningModule):
             track_loss = {k: self.cfg.LOSS.TRACK_W * v for k, v in track_loss.items()}
         return track_loss, matched_ins
 
+    # def fixed_match(self, track_ins, outputs, targets):
+    #     """
+    #     Fixed match between tracked instances and targets based on ID.
+    #     Return matched and non-matched instances, outputs and targets
+    #     """
+    #     m_ins_ids, m_tgt_iids = torch.where(track_ins.id[:, None] == targets["id"][0])
+    #     m_out_log = outputs["pred_logits"][:, m_ins_ids, :]
+    #     m_out_masks = outputs["pred_masks"][:, :, m_ins_ids]
+    #     m_tgt_classes = targets["classes"][0][m_tgt_iids]
+    #     m_tgt_masks = targets["masks"][0][m_tgt_iids]
+    #     m_tgt_ids = targets["id"][0][m_tgt_iids]
+    #     if len(m_ins_ids) == 0:
+    #         return [], [], [], [], []
+
+    #     matched_outputs = {"pred_logits": m_out_log, "pred_masks": m_out_masks}
+    #     matched_targets = {
+    #         "classes": [m_tgt_classes],
+    #         "masks": [m_tgt_masks],
+    #         "id": [m_tgt_ids],
+    #     }
+    #     matched_ins = track_ins[m_ins_ids]
+
+    #     return matched_ins, matched_outputs, matched_targets
+
     def fixed_match(self, track_ins, outputs, targets):
         """
         Fixed match between tracked instances and targets based on ID.
-        Return matched and non-matched instances, outputs and targets
+        Return matched and non-matched instances, outputs, and targets
         """
         m_ins_ids, m_tgt_iids = torch.where(track_ins.id[:, None] == targets["id"][0])
+        if len(m_ins_ids) == 0:
+            # When no matches are found, return empty tensors of the correct structure
+            empty_tensor = torch.tensor([], device=track_ins.id.device, dtype=torch.long)
+            empty_outputs = {"pred_logits": empty_tensor, "pred_masks": empty_tensor}
+            empty_targets = {"classes": empty_tensor, "masks": empty_tensor, "id": empty_tensor}
+            return track_ins[:0], empty_outputs, empty_targets  # Slice track_ins to get a tensor of the same structure but with zero elements
+
         m_out_log = outputs["pred_logits"][:, m_ins_ids, :]
         m_out_masks = outputs["pred_masks"][:, :, m_ins_ids]
         m_tgt_classes = targets["classes"][0][m_tgt_iids]
         m_tgt_masks = targets["masks"][0][m_tgt_iids]
         m_tgt_ids = targets["id"][0][m_tgt_iids]
-        if len(m_ins_ids) == 0:
-            return [], [], [], [], []
 
         matched_outputs = {"pred_logits": m_out_log, "pred_masks": m_out_masks}
         matched_targets = {

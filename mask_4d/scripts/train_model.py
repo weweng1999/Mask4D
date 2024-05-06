@@ -11,7 +11,7 @@ from mask_4d.models.mask_model import Mask4D
 from pytorch_lightning import Trainer
 from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-
+from pytorch_lightning.strategies import DDPStrategy
 
 @click.command()
 @click.option("--w", type=str, default=None, required=False)
@@ -64,20 +64,24 @@ def main(w, ckpt):
     )
 
     callbacks = [lr_monitor, pq_ckpt, pq4d_ckpt, aq_ckpt]
-
+    
+    strategy = DDPStrategy(find_unused_parameters=True)
     trainer = Trainer(
-        gpus=cfg.TRAIN.N_GPUS,
-        accelerator="ddp",
+        accelerator="auto",   # This specifies that GPUs should be used
+        devices=1,
+        strategy=strategy,      # Distributed Data Parallel strategy  
+        # gpus=cfg.TRAIN.N_GPUS,
+        # accelerator="ddp",
         logger=tb_logger,
         max_epochs=cfg.TRAIN.MAX_EPOCH,
         callbacks=callbacks,
         log_every_n_steps=1,
         gradient_clip_val=0.5,
         accumulate_grad_batches=cfg.TRAIN.BATCH_ACC,
-        resume_from_checkpoint=ckpt,
+        # resume_from_checkpoint=ckpt,
     )
 
-    trainer.fit(model, data)
+    trainer.fit(model, data,ckpt_path = ckpt)
 
 
 def getDir(obj):

@@ -5,14 +5,14 @@ TRAIN:
     STEP: 80
     DECAY: 0.1
     LR: 0.0001
-    MAX_EPOCH: 50
+    MAX_EPOCH: 1
     BATCH_SIZE: 1
     NUM_WORKERS: 10
     N_GPUS: -1
 
-    N_SCANS: 3
+    N_SCANS: 2
     INTERVAL: 10
-    BATCH_ACC: 2
+    BATCH_ACC: 1
 
 MODEL:
     OBJECT_MASK_THRESHOLD: 0.8
@@ -38,4 +38,4 @@ KITTI:
     MIN_POINTS: 10
     SPACE: # coord limits
         [[-51.2,51.2],[-51.2,51.2],[-4.0, 2.4]]
-    SUB_NUM_POINTS: 80000
+    SUB_NUM_POINTS: 10000

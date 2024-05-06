@@ -4,6 +4,8 @@ from functools import partial
 import numpy as np
 import torch
 import torch.nn as nn
+import sys
+sys.path.append('/home/weweng/dev_ws/SparseTransformer')
 from sptr import (SparseTrTensor, get_indices_params, sparse_self_attention,
                   to_3d_numpy)
 from timm.models.layers import DropPath, trunc_normal_

@@ -47,8 +47,24 @@ class PanopticKittiEvaluator:
         self.stuff = get_stuff()
         self.all_classes = self.things + self.stuff
 
+    # def update(self, sem_preds, ins_preds, inputs):
+    #     for i in range(len(sem_preds)):
+    #         self.evaluator.addBatch_w_fname(
+    #             sem_preds[i],
+    #             ins_preds[i],
+    #             inputs["sem_label"][i].reshape(-1),
+    #             inputs["ins_label"][i].reshape(-1),
+    #             inputs["fname"][i],
+    #         )
+    #     self.update_metrics()
+
     def update(self, sem_preds, ins_preds, inputs):
-        for i in range(len(sem_preds)):
+        # Check if predictions are None before processing
+        if sem_preds is None or ins_preds is None:
+            print("Received None for predictions, skipping this batch.")
+            return
+        
+        for i in range(len(sem_preds)):  # Now safe to assume sem_preds is not None
             self.evaluator.addBatch_w_fname(
                 sem_preds[i],
                 ins_preds[i],
@@ -57,7 +73,7 @@ class PanopticKittiEvaluator:
                 inputs["fname"][i],
             )
         self.update_metrics()
-
+    
     def get_class_inv_lut(self):
         return self.class_inv_lut
 
